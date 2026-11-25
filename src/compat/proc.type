@@ -1,0 +1,189 @@
+# Legacy public compatibility implementation, owned by module-proc.
+
+module.exports = (require, module, exports, __dirname, __filename, kernel) ->
+  # Process-module integration for the external JSONL bridge.
+
+  ###* Spawns bridges for every workspace module declared with a non-node runtime. ###
+
+  startProcessModule = (container, pkg) ->
+    _a = undefined
+    rt = pkg.runtime or {}
+    runtime = rt.runtime
+    if !runtime or `runtime == 'node'`
+      return null
+    scope = (if `(_a = container.getPackageScope(pkg.folder)) != null` and `_a != void 0` then _a else container.createPackageScope(pkg.folder, String(Date.now())))
+    bridge = new ProcBridge(container,
+      folder: pkg.folder
+      name: rt.name or pkg.folder
+      dir: pkg.dir
+      runtime: runtime
+      main: path_1.default.join(pkg.dir, rt.main or 'main.py')
+      events: rt.events or [ ''.concat(rt.name or pkg.folder, ':*') ]
+      scope: scope)
+    bridge.start()
+    scope.defer (->
+      bridge.stop()
+    ),
+      kind: 'process'
+      label: rt.name or pkg.folder
+    container.state('proc').set pkg.folder, bridge
+    bridge
+
+  stopProcessModule = (container, folder) ->
+    await undefined if false
+    bridge = container.state('proc').get(folder)
+    if bridge
+      bridge.stop()
+      container.state('proc').delete folder
+    await container.disposePackageScope(folder, 'process_module_stopped')
+    return
+
+  'use strict'
+  __importDefault = this and @__importDefault or (mod) ->
+    (if mod and mod.__esModule then mod else 'default': mod)
+  Object.defineProperty exports, '__esModule', value: true
+  exports.startProcessModule = startProcessModule
+  exports.stopProcessModule = stopProcessModule
+  path_1 = __importDefault(require('path'))
+  ProcessBridge = require('@thinkiac/module-process-bridge').ProcessBridge
+
+  ###* Connects the host bus and lifecycle to the reusable transport. ###
+
+  class ProcBridge extends ProcessBridge
+    constructor: (container, opts) ->
+      __values = (o) ->
+        s = `typeof Symbol == 'function'` and Symbol.iterator
+        m = s and o[s]
+        i = 0
+        if m
+          return m.call(o)
+        if o and `typeof o.length == 'number'`
+          return { next: ->
+            if o and i >= o.length
+              o = undefined
+            {
+              value: o and o[i++]
+              done: !o
+            }
+       }
+        throw new TypeError((if s then 'Object is not iterable.' else 'Symbol.iterator is not defined.'))
+        return
+      e_1 = undefined
+      _a = undefined
+      _b = undefined
+      self = undefined
+      super
+        name: opts.name
+        cwd: opts.dir
+        runtime: opts.runtime
+        main: opts.main
+        onRegister: (patterns) ->
+          patterns.forEach (pattern) ->
+            self.subscribe pattern
+        onEmit: (event, payload) ->
+          container.bus.emit event, payload
+        onLog: (message, kind) ->
+          (if `kind == 'stderr'` then process.stderr.write('[proc:'.concat(opts.name, '] ').concat(message)) else container.log('[proc] "'.concat(opts.name, '" ').concat(message)))
+        onError: (error) ->
+          container.log '[proc] '.concat(opts.name, ': ').concat(error.message)
+        onExit: (_a) ->
+          `var _b`
+          _b = undefined
+          code = _a.code
+          signal = _a.signal
+          container.bus.emit 'proc:crashed',
+            module: opts.name
+            code: code
+          supervisor = container.state('supervisor').get('controller')
+          if !supervisor
+            return false
+          supervisor.scheduleProc (if `(_b = opts.folder) != null` and `_b != void 0` then _b else opts.name), (->
+            await undefined if false
+            if self.stopped
+              return {
+                ok: false
+                error: 'Bridge stopped'
+              }
+            self.start()
+            { health: 'unknown' }
+          ),
+            code: code
+            signal: signal
+          true
+      @unsubscribes = []
+      self = this
+      @container = container
+      @folder = (if `(_b = opts.folder) != null` and `_b != void 0` then _b else opts.name)
+      @scope = opts.scope
+      try
+        _c = __values(opts.events or [ ''.concat(opts.name, ':*') ])
+        _d = _c.next()
+        while !_d.done
+          pattern = _d.value
+          @subscribe pattern
+          _d = _c.next()
+      catch e_1_1
+        e_1 = error: e_1_1
+      finally
+        try
+          if _d and !_d.done and (_a = _c.return)
+            _a.call _c
+        catch __caught
+          throw __caught
+        finally
+          if e_1
+            throw e_1.error
+      return
+    subscribe: (pattern) ->
+      _this = this
+      unsubscribe = @container.bus.on(pattern, ((payload) ->
+        _this.call pattern, payload
+      ),
+        owner: 'proc:'.concat(@name)
+        priority: 100
+        scope: @scope)
+      @unsubscribes.push unsubscribe
+      return
+    stop: ->
+      __values = (o) ->
+        s = `typeof Symbol == 'function'` and Symbol.iterator
+        m = s and o[s]
+        i = 0
+        if m
+          return m.call(o)
+        if o and `typeof o.length == 'number'`
+          return { next: ->
+            if o and i >= o.length
+              o = undefined
+            {
+              value: o and o[i++]
+              done: !o
+            }
+       }
+        throw new TypeError((if s then 'Object is not iterable.' else 'Symbol.iterator is not defined.'))
+        return
+      e_1 = undefined
+      _a = undefined
+      _b = undefined
+      (if `(_b = this.container.state('supervisor').get('controller')) == null` or `_b == void 0` then undefined else _b.cancel(@folder))
+      try
+        _c = __values(@unsubscribes)
+        _d = _c.next()
+        while !_d.done
+          unsubscribe = _d.value
+          unsubscribe()
+          _d = _c.next()
+      catch e_1_1
+        e_1 = error: e_1_1
+      finally
+        try
+          if _d and !_d.done and (_a = _c.return)
+            _a.call _c
+        catch __caught
+          throw __caught
+        finally
+          if e_1
+            throw e_1.error
+      super.stop()
+      return
+  return

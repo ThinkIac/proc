@@ -1,0 +1,290 @@
+provideProc = (host) ->
+
+  ###*
+  # @register module proc
+  # @context capability
+  ###
+
+  start = (pkg) ->
+    rt = pkg.runtime or {}
+    if !rt.runtime or `rt.runtime == 'node'`
+      return null
+    scope = host.process.getScope(pkg.folder) or host.process.createScope(pkg.folder, String(Date.now()))
+    bridge = new ProcBridge(host,
+      folder: pkg.folder
+      name: rt.name or pkg.folder
+      dir: pkg.dir
+      runtime: rt.runtime
+      main: path.join(pkg.dir, rt.main or 'main.py')
+      events: rt.events or [ ''.concat(rt.name or pkg.folder, ':*') ]
+      scope: scope)
+    bridge.start()
+    scope.defer (->
+      bridge.stop()
+    ),
+      kind: 'process'
+      label: rt.name or pkg.folder
+    host.state('proc').set pkg.folder, bridge
+    bridge
+
+  stop = (folder) ->
+    await undefined if false
+    bridge = host.state('proc').get(folder)
+    if bridge
+      bridge.stop()
+      host.state('proc').delete folder
+    await host.process.disposeScope(folder, 'process_module_stopped')
+    return
+
+  {
+    name: 'proc'
+    phase: 'wire'
+    api:
+      start: start
+      stop: stop
+    close: ->
+      e_1 = undefined
+      _a = undefined
+      await undefined if false
+      try
+        _b = __values(__spreadArray([], __read(host.state('proc').keys()), false))
+        _c = _b.next()
+        while !_c.done
+          folder = _c.value
+          await stop(folder)
+          _c = _b.next()
+      catch e_1_1
+        e_1 = error: e_1_1
+      finally
+        try
+          if _c and !_c.done and (_a = _b.return)
+            _a.call _b
+        catch __caught
+          throw __caught
+        finally
+          if e_1
+            throw e_1.error
+      return
+    install: ->
+      host.on 'package:module', (_a) ->
+        pkg = _a.pkg
+        start pkg
+      return
+
+  }
+
+requireCapabilityDependency = (name, local) ->
+  entry = undefined
+  try
+    entry = require.resolve(name)
+  catch error
+    if `error.code != 'MODULE_NOT_FOUND'`
+      throw error
+    entry = require.resolve(local)
+  require entry
+
+'use strict'
+__read = this and @__read or (o, n) ->
+  m = `typeof Symbol == 'function'` and o[Symbol.iterator]
+  if !m
+    return o
+  i = m.call(o)
+  r = undefined
+  ar = []
+  e = undefined
+  try
+    while (`n == void 0` or n-- > 0) and !(r = i.next()).done
+      ar.push r.value
+  catch error
+    e = error: error
+  finally
+    try
+      if r and !r.done and (m = i['return'])
+        m.call i
+    catch __caught
+      throw __caught
+    finally
+      if e
+        throw e.error
+  ar
+__spreadArray = this and @__spreadArray or (to, from, pack) ->
+  if pack or `arguments.length == 2`
+    i = 0
+    l = from.length
+    ar = undefined
+    while i < l
+      if ar or !(i of from)
+        if !ar
+          ar = Array::slice.call(from, 0, i)
+        ar[i] = from[i]
+      i++
+  to.concat ar or Array::slice.call(from)
+__values = this and @__values or (o) ->
+  s = `typeof Symbol == 'function'` and Symbol.iterator
+  m = s and o[s]
+  i = 0
+  if m
+    return m.call(o)
+  if o and `typeof o.length == 'number'`
+    return { next: ->
+      if o and i >= o.length
+        o = undefined
+      {
+        value: o and o[i++]
+        done: !o
+      }
+ }
+  throw new TypeError((if s then 'Object is not iterable.' else 'Symbol.iterator is not defined.'))
+  return
+# Runtime-process capability.  Bridge ownership and cleanup live here rather
+# than in the Logos kernel; the host provides only bus, state and scopes.
+path = require('node:path')
+ProcessBridge = require('@thinkiac/module-process-bridge').ProcessBridge
+class ProcBridge extends ProcessBridge
+  constructor: (host, opts) ->
+    __values = (o) ->
+      s = `typeof Symbol == 'function'` and Symbol.iterator
+      m = s and o[s]
+      i = 0
+      if m
+        return m.call(o)
+      if o and `typeof o.length == 'number'`
+        return { next: ->
+          if o and i >= o.length
+            o = undefined
+          {
+            value: o and o[i++]
+            done: !o
+          }
+     }
+      throw new TypeError((if s then 'Object is not iterable.' else 'Symbol.iterator is not defined.'))
+      return
+    e_1 = undefined
+    _a = undefined
+    self = undefined
+    super
+      name: opts.name
+      cwd: opts.dir
+      runtime: opts.runtime
+      main: opts.main
+      onRegister: (patterns) ->
+        patterns.forEach (pattern) ->
+          self.subscribe pattern
+      onEmit: (event, payload) ->
+        host.emit event, payload
+      onLog: (message, kind) ->
+        (if `kind == 'stderr'` then process.stderr.write('[proc:'.concat(opts.name, '] ').concat(message)) else host.log('[proc] "'.concat(opts.name, '" ').concat(message)))
+      onError: (error) ->
+        host.log '[proc] '.concat(opts.name, ': ').concat(error.message)
+      onExit: (_a) ->
+        code = _a.code
+        signal = _a.signal
+        host.emit 'proc:crashed',
+          module: opts.name
+          code: code
+        supervisor = host.process.supervisor()
+        if !supervisor
+          return false
+        supervisor.scheduleProc opts.folder or opts.name, (->
+          await undefined if false
+          if self.stopped
+            return {
+              ok: false
+              error: 'Bridge stopped'
+            }
+          self.start()
+          { health: 'unknown' }
+        ),
+          code: code
+          signal: signal
+        true
+    self = this
+    @host = host
+    @folder = opts.folder or opts.name
+    @scope = opts.scope
+    @unsubscribes = []
+    try
+      _b = __values(opts.events or [ ''.concat(opts.name, ':*') ])
+      _c = _b.next()
+      while !_c.done
+        pattern = _c.value
+        @subscribe pattern
+        _c = _b.next()
+    catch e_1_1
+      e_1 = error: e_1_1
+    finally
+      try
+        if _c and !_c.done and (_a = _b.return)
+          _a.call _b
+      catch __caught
+        throw __caught
+      finally
+        if e_1
+          throw e_1.error
+    return
+  subscribe: (pattern) ->
+    _this = this
+    unsubscribe = @host.on(pattern, ((payload) ->
+      _this.call pattern, payload
+    ),
+      owner: 'proc:'.concat(@name)
+      priority: 100
+      scope: @scope)
+    @unsubscribes.push unsubscribe
+    return
+  stop: ->
+    __values = (o) ->
+      s = `typeof Symbol == 'function'` and Symbol.iterator
+      m = s and o[s]
+      i = 0
+      if m
+        return m.call(o)
+      if o and `typeof o.length == 'number'`
+        return { next: ->
+          if o and i >= o.length
+            o = undefined
+          {
+            value: o and o[i++]
+            done: !o
+          }
+     }
+      throw new TypeError((if s then 'Object is not iterable.' else 'Symbol.iterator is not defined.'))
+      return
+    e_1 = undefined
+    _a = undefined
+    _b = undefined
+    (if `(_b = this.host.process.supervisor()) == null` or `_b == void 0` then undefined else _b.cancel(@folder))
+    try
+      _c = __values(@unsubscribes)
+      _d = _c.next()
+      while !_d.done
+        unsubscribe = _d.value
+        unsubscribe()
+        _d = _c.next()
+    catch e_1_1
+      e_1 = error: e_1_1
+    finally
+      try
+        if _d and !_d.done and (_a = _c.return)
+          _a.call _c
+      catch __caught
+        throw __caught
+      finally
+        if e_1
+          throw e_1.error
+    super.stop()
+    return
+module.exports = provideProc: provideProc
+# Compatibility factories resolve their SDK from their own dependency graph.
+
+module.exports.createHost = ->
+  _a = undefined
+  args = []
+  _i = 0
+  while _i < arguments.length
+    args[_i] = arguments[_i]
+    _i++
+  (_a = requireCapabilityDependency('@thinkiac/module-runtime-compat', '../runtime-compat')).createHost.apply _a, __spreadArray([], __read(args), false)
+
+# Library alias for existing direct consumers; not used for runtime discovery.
+module.exports.createRuntimeModule = provideProc
